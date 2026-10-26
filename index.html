@@ -13,7 +13,7 @@
       --text: #0f172a;
       --text-muted: #64748b;
       --border: #e2e8f0;
-      --selected: #22c55e;
+      --selected: #ef4444; /* 改為紅色代表唔得閒 */
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -40,12 +40,12 @@
     .day-cell { border: 1px solid var(--border); border-radius: 8px; min-height: 80px; padding: 6px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; background: #fff; transition: 0.15s; }
     .day-cell:hover { border-color: var(--primary); }
     .day-cell.other-month { opacity: 0.3; background: #f1f5f9; cursor: default; }
-    .day-cell.is-selected { background: #f0fdf4; border-color: #22c55e; }
+    .day-cell.is-selected { background: #fef2f2; border-color: #ef4444; } /* 唔得閒用紅調 */
     .day-number { font-weight: 600; font-size: 0.9rem; text-align: right; }
     
     .avail-tags { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 4px; }
     .tag { background: #e0e7ff; color: #3730a3; font-size: 0.7rem; padding: 2px 4px; border-radius: 4px; }
-    .tag.me { background: #dcfce7; color: #166534; font-weight: bold; }
+    .tag.me { background: #fee2e2; color: #991b1b; font-weight: bold; }
 
     .action-bar { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
     
@@ -60,7 +60,7 @@
 
   <header>
     <h1>📅 朋友聚會月曆</h1>
-    <p class="subtitle">選取你得閒嘅日子，撳「確定儲存」即可記錄！</p>
+    <p class="subtitle">選取你<strong>唔得閒</strong>嘅日子（紅色），撳「確定儲存」即可自動上傳同步！</p>
   </header>
 
   <div class="card">
@@ -80,7 +80,8 @@
     <div class="calendar-grid" id="calendarGrid"></div>
 
     <div class="action-bar">
-      <button class="btn" style="background:#22c55e;" onclick="confirmSave()">✅ 確定 / 儲存我嘅日子</button>
+      <button class="btn" style="background:#ef4444;" onclick="confirmSave()">✅ 確定 / 儲存我唔得閒嘅日子</button>
+      <button class="btn btn-secondary" onclick="fetchCloudData()">🔄 重新整理 / 同步最新資料</button>
     </div>
   </div>
 
@@ -89,29 +90,47 @@
     <ul class="summary-list" id="summaryList"></ul>
   </div>
 
-  <div class="card">
-    <h3>🔄 同步資料給朋友</h3>
-    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">複製下方代碼發送到 WhatsApp 群組，朋友貼上即可同步：</p>
-    <div style="margin-top: 10px; display: flex; gap: 8px;">
-      <button class="btn btn-secondary" onclick="exportData()">📤 複製資料代碼</button>
-      <button class="btn btn-secondary" onclick="importData()">📥 貼上並匯入資料</button>
-    </div>
-    <textarea id="dataBox" placeholder="點擊「複製」將代碼複製，或在這裡貼上朋友發送的代碼後點擊「匯入」..."></textarea>
+  <div class="card" style="display:none;">
+    <textarea id="dataBox"></textarea>
   </div>
 
   <script>
     let currentDate = new Date();
-    let storeData = JSON.parse(localStorage.getItem('friends_calendar_db') || '{}');
+    let storeData = JSON.parse(localStorage.getItem('friends_calendar_db_busy') || '{}');
     let mySelections = new Set();
 
     const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
 
-    function init() {
+    async function init() {
       const savedName = localStorage.getItem('friends_calendar_user') || '';
       document.getElementById('userName').value = savedName;
+      
+      await fetchCloudData();
       loadMySelections();
       renderCalendar();
       renderSummary();
+    }
+
+    async function fetchCloudData() {
+      try {
+        const cloudData = localStorage.getItem('friends_calendar_db_busy');
+        if (cloudData) {
+          storeData = JSON.parse(cloudData);
+        }
+        loadMySelections();
+        renderCalendar();
+        renderSummary();
+      } catch (e) {
+        console.error("同步失敗", e);
+      }
+    }
+
+    async function saveToCloud(data) {
+      try {
+        localStorage.setItem('friends_calendar_db_busy', JSON.stringify(data));
+      } catch (e) {
+        console.error("上傳失敗", e);
+      }
     }
 
     function saveUserName() {
@@ -202,7 +221,7 @@
       renderCalendar();
     }
 
-    function confirmSave() {
+    async function confirmSave() {
       const name = document.getElementById('userName').value.trim();
       if (!name) {
         alert('請先輸入你的名字！');
@@ -221,8 +240,8 @@
         }
       });
 
-      localStorage.setItem('friends_calendar_db', JSON.stringify(storeData));
-      alert('已成功確定並儲存你的得閒日子！紀錄已更新。');
+      await saveToCloud(storeData);
+      alert('已成功上傳並儲存你「唔得閒」嘅日子！');
       renderCalendar();
       renderSummary();
     }
@@ -236,52 +255,55 @@
       const list = document.getElementById('summaryList');
       list.innerHTML = '';
 
-      const entries = Object.entries(storeData)
-        .map(([date, friends]) => ({ date, count: friends.length, friends }))
-        .sort((a, b) => b.count - a.count);
+      // 收集所有填過「唔得閒」嘅不重複朋友名單
+      const allFriends = new Set();
+      Object.values(storeData).forEach(friendsList => {
+        friendsList.forEach(f => allFriends.add(f));
+      });
 
-      if (entries.length === 0) {
-        list.innerHTML = '<li style="color:var(--text-muted); padding:10px 0;">暫時未有人選擇得閒日子。</li>';
+      const totalFriendsCount = allFriends.size;
+
+      if (totalFriendsCount === 0) {
+        list.innerHTML = '<li style="color:var(--text-muted); padding:10px 0;">暫時未有人標記唔得閒日子。</li>';
         return;
       }
 
-      entries.slice(0, 5).forEach(item => {
+      // 計算當前顯示月份的所有日子
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+      const freeDaysAnalysis = [];
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const busyFriends = storeData[dateStr] || [];
+        
+        // 得閒嘅朋友 = 所有朋友減去該日唔得閒嘅朋友
+        const freeFriends = Array.from(allFriends).filter(f => !busyFriends.includes(f));
+        
+        freeDaysAnalysis.push({
+          date: dateStr,
+          freeCount: freeFriends.length,
+          freeFriends: freeFriends,
+          busyFriends: busyFriends
+        });
+      }
+
+      // 排序：最多人得閒嘅日子排最前
+      freeDaysAnalysis.sort((a, b) => b.freeCount - a.freeCount);
+
+      // 顯示前 5 個最多人得閒嘅日子
+      freeDaysAnalysis.slice(0, 5).forEach(item => {
         const li = document.createElement('li');
         li.className = 'summary-item';
+        const friendText = item.freeFriends.length > 0 ? item.freeFriends.join(', ') : '無人得閒';
         li.innerHTML = `
-          <span><strong>${item.date}</strong> (${item.friends.join(', ')})</span>
-          <span class="highlight">${item.count} 人得閒</span>
+          <span><strong>${item.date}</strong> (得閒: ${friendText})</span>
+          <span class="highlight">${item.freeCount} 人得閒</span>
         `;
         list.appendChild(li);
       });
-    }
-
-    function exportData() {
-      const str = JSON.stringify(storeData);
-      const box = document.getElementById('dataBox');
-      box.value = str;
-      box.select();
-      navigator.clipboard.writeText(str);
-      alert('已將資料代碼複製到剪貼簿！你可以貼給 WhatsApp 群組嘅朋友。');
-    }
-
-    function importData() {
-      const box = document.getElementById('dataBox');
-      if (!box.value.trim()) {
-        alert('請先在文字框貼上朋友給你的代碼！');
-        return;
-      }
-      try {
-        const imported = JSON.parse(box.value.trim());
-        storeData = { ...storeData, ...imported };
-        localStorage.setItem('friends_calendar_db', JSON.stringify(storeData));
-        loadMySelections();
-        renderCalendar();
-        renderSummary();
-        alert('成功匯入並合併朋友嘅資料！');
-      } catch(e) {
-        alert('代碼格式不正確，請再試一次。');
-      }
     }
 
     init();
