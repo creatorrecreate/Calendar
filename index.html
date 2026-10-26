@@ -13,7 +13,7 @@
       --text: #0f172a;
       --text-muted: #64748b;
       --border: #e2e8f0;
-      --selected: #ef4444; /* 紅色代表唔得閒 */
+      --selected: #ef4444; /* 改為紅色代表唔得閒 */
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -28,19 +28,6 @@
     .user-section { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     .user-section label { font-weight: 600; }
     input[type="text"] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 1rem; flex: 1; min-width: 150px; }
-
-    .status-badge {
-      font-size: 0.8rem;
-      padding: 4px 8px;
-      border-radius: 12px;
-      font-weight: 600;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .status-badge.connected { background: #dcfce7; color: #166534; }
-    .status-badge.connecting { background: #fef3c7; color: #92400e; }
-    .status-badge.error { background: #fee2e2; color: #991b1b; }
 
     .calendar-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     .btn { background: var(--primary); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; transition: 0.2s; }
@@ -57,10 +44,12 @@
     .day-number { font-weight: 600; font-size: 0.9rem; text-align: right; }
     
     .avail-tags { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 4px; }
-    .tag { background: #fee2e2; color: #991b1b; font-size: 0.7rem; padding: 2px 4px; border-radius: 4px; }
-    .tag.me { background: #ef4444; color: #ffffff; font-weight: bold; }
+    .tag { background: #e0e7ff; color: #3730a3; font-size: 0.7rem; padding: 2px 4px; border-radius: 4px; }
+    .tag.me { background: #fee2e2; color: #991b1b; font-weight: bold; }
 
     .action-bar { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+    
+    textarea { width: 100%; height: 80px; margin-top: 8px; padding: 8px; border-radius: 6px; border: 1px solid var(--border); font-family: monospace; font-size: 0.85rem; }
     
     .summary-list { list-style: none; margin-top: 10px; }
     .summary-item { padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
@@ -78,7 +67,6 @@
     <div class="user-section">
       <label for="userName">你的名字：</label>
       <input type="text" id="userName" placeholder="輸入名字 (例如: Alex)" onchange="saveUserName()">
-      <span id="syncStatus" class="status-badge connecting">🟡 連線中...</span>
     </div>
   </div>
 
@@ -102,124 +90,78 @@
     <ul class="summary-list" id="summaryList"></ul>
   </div>
 
-  <!-- Firebase JavaScript SDK Modular Version -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+  <div class="card" style="display:none;">
+    <textarea id="dataBox"></textarea>
+  </div>
 
-    // Application state
-    window.currentDate = new Date();
-    window.storeData = {};
-    window.mySelections = new Set();
-    window.weekDays = ['日', '一', '二', '三', '四', '五', '六'];
+  <script>
+    let currentDate = new Date();
+    let storeData = JSON.parse(localStorage.getItem('friends_calendar_db_busy') || '{}');
+    let mySelections = new Set();
 
-    // Safe environment setup
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'shared-friends-calendar-2026';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' 
-      ? JSON.parse(__firebase_config) 
-      : {
-          apiKey: "AIzaSyDemoConfigKey",
-          authDomain: "friends-calendar-demo.firebaseapp.com",
-          projectId: "friends-calendar-demo",
-          storageBucket: "friends-calendar-demo.appspot.com",
-          messagingSenderId: "1234567890",
-          appId: "1:1234567890:web:abcdef123456"
-        };
+    const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
 
-    let app, auth, db;
-    let isCloudReady = false;
-
-    // Update status badge UI
-    function updateStatus(state, text) {
-      const badge = document.getElementById('syncStatus');
-      if (!badge) return;
-      badge.className = `status-badge ${state}`;
-      badge.innerText = text;
+    async function init() {
+      const savedName = localStorage.getItem('friends_calendar_user') || '';
+      document.getElementById('userName').value = savedName;
+      
+      await fetchCloudData();
+      loadMySelections();
+      renderCalendar();
+      renderSummary();
     }
 
-    // Initialize Firebase Realtime Data Listener
-    async function initFirebase() {
+    async function fetchCloudData() {
       try {
-        app = initializeApp(firebaseConfig);
-        auth = getAuth(app);
-        db = getFirestore(app);
-
-        // Authenticate user
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
+        const cloudData = localStorage.getItem('friends_calendar_db_busy');
+        if (cloudData) {
+          storeData = JSON.parse(cloudData);
         }
-
-        // Shared Document path following strict artifacts rule
-        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'calendar_shared', 'global_data');
-
-        // Real-time Firestore snapshot listener
-        onSnapshot(docRef, (snapshot) => {
-          isCloudReady = true;
-          updateStatus('connected', '🟢 雲端同步連線中');
-          
-          if (snapshot.exists()) {
-            window.storeData = snapshot.data().dates || {};
-          } else {
-            window.storeData = {};
-          }
-
-          window.loadMySelections();
-          window.renderCalendar();
-          window.renderSummary();
-        }, (error) => {
-          console.warn("Firestore listener error, using local fallback:", error);
-          updateStatus('error', '🔴 離線模式 (資料本地暫存)');
-          fallbackToLocalStorage();
-        });
-
-      } catch (err) {
-        console.warn("Firebase Auth or Init failed, using local storage:", err);
-        updateStatus('error', '🔴 離線模式 (資料本地暫存)');
-        fallbackToLocalStorage();
+        loadMySelections();
+        renderCalendar();
+        renderSummary();
+      } catch (e) {
+        console.error("同步失敗", e);
       }
     }
 
-    function fallbackToLocalStorage() {
-      const local = localStorage.getItem('friends_calendar_busy_db');
-      window.storeData = local ? JSON.parse(local) : {};
-      window.loadMySelections();
-      window.renderCalendar();
-      window.renderSummary();
+    async function saveToCloud(data) {
+      try {
+        localStorage.setItem('friends_calendar_db_busy', JSON.stringify(data));
+      } catch (e) {
+        console.error("上傳失敗", e);
+      }
     }
 
-    // Window global functions for user interactions
-    window.saveUserName = function() {
+    function saveUserName() {
       const name = document.getElementById('userName').value.trim();
       localStorage.setItem('friends_calendar_user', name);
-      window.loadMySelections();
-      window.renderCalendar();
-    };
+      loadMySelections();
+      renderCalendar();
+    }
 
-    window.loadMySelections = function() {
+    function loadMySelections() {
       const name = document.getElementById('userName').value.trim();
-      window.mySelections.clear();
+      mySelections.clear();
       if (!name) return;
-
-      for (let dateStr in window.storeData) {
-        if (Array.isArray(window.storeData[dateStr]) && window.storeData[dateStr].includes(name)) {
-          window.mySelections.add(dateStr);
+      
+      for (let dateStr in storeData) {
+        if (storeData[dateStr].includes(name)) {
+          mySelections.add(dateStr);
         }
       }
-    };
+    }
 
-    window.renderCalendar = function() {
-      const year = window.currentDate.getFullYear();
-      const month = window.currentDate.getMonth();
-
+    function renderCalendar() {
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      
       document.getElementById('currentMonthStr').innerText = `${year} 年 ${month + 1} 月`;
-
+      
       const grid = document.getElementById('calendarGrid');
       grid.innerHTML = '';
 
-      window.weekDays.forEach(day => {
+      weekDays.forEach(day => {
         const el = document.createElement('div');
         el.className = 'weekday';
         el.innerText = day;
@@ -241,15 +183,15 @@
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         const cell = document.createElement('div');
         cell.className = 'day-cell';
-
-        if (window.mySelections.has(dateStr)) {
+        
+        if (mySelections.has(dateStr)) {
           cell.classList.add('is-selected');
         }
 
-        cell.onclick = () => window.toggleDay(dateStr);
+        cell.onclick = () => toggleDay(dateStr);
 
         let tagsHTML = '<div class="avail-tags">';
-        const friends = window.storeData[dateStr] || [];
+        const friends = storeData[dateStr] || [];
         friends.forEach(f => {
           const isMe = f === myName;
           tagsHTML += `<span class="tag ${isMe ? 'me' : ''}">${f}</span>`;
@@ -262,141 +204,109 @@
         `;
         grid.appendChild(cell);
       }
-    };
+    }
 
-    window.toggleDay = function(dateStr) {
+    function toggleDay(dateStr) {
       const name = document.getElementById('userName').value.trim();
       if (!name) {
         alert('請先在上方輸入你的名字！');
         return;
       }
 
-      if (window.mySelections.has(dateStr)) {
-        window.mySelections.delete(dateStr);
+      if (mySelections.has(dateStr)) {
+        mySelections.delete(dateStr);
       } else {
-        window.mySelections.add(dateStr);
+        mySelections.add(dateStr);
       }
-      window.renderCalendar();
-    };
+      renderCalendar();
+    }
 
-    window.confirmSave = async function() {
+    async function confirmSave() {
       const name = document.getElementById('userName').value.trim();
       if (!name) {
         alert('請先輸入你的名字！');
         return;
       }
 
-      // Clean existing records for this user
-      for (let dateStr in window.storeData) {
-        if (Array.isArray(window.storeData[dateStr])) {
-          window.storeData[dateStr] = window.storeData[dateStr].filter(f => f !== name);
-          if (window.storeData[dateStr].length === 0) {
-            delete window.storeData[dateStr];
-          }
-        }
+      for (let dateStr in storeData) {
+        storeData[dateStr] = storeData[dateStr].filter(f => f !== name);
+        if (storeData[dateStr].length === 0) delete storeData[dateStr];
       }
 
-      // Add new selections for this user
-      window.mySelections.forEach(dateStr => {
-        if (!window.storeData[dateStr]) window.storeData[dateStr] = [];
-        if (!window.storeData[dateStr].includes(name)) {
-          window.storeData[dateStr].push(name);
+      mySelections.forEach(dateStr => {
+        if (!storeData[dateStr]) storeData[dateStr] = [];
+        if (!storeData[dateStr].includes(name)) {
+          storeData[dateStr].push(name);
         }
       });
 
-      // Save to Firebase Cloud
-      try {
-        if (isCloudReady && auth.currentUser) {
-          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'calendar_shared', 'global_data');
-          await setDoc(docRef, { dates: window.storeData, updatedAt: new Date().toISOString() }, { merge: true });
-        } else {
-          localStorage.setItem('friends_calendar_busy_db', JSON.stringify(window.storeData));
-        }
-        alert('已成功上傳並儲存你「唔得閒」嘅日子！');
-      } catch (e) {
-        console.error("Cloud save failed:", e);
-        localStorage.setItem('friends_calendar_busy_db', JSON.stringify(window.storeData));
-        alert('儲存完成 (暫存於本地)。');
-      }
+      await saveToCloud(storeData);
+      alert('已成功上傳並儲存你「唔得閒」嘅日子！');
+      renderCalendar();
+      renderSummary();
+    }
 
-      window.renderCalendar();
-      window.renderSummary();
-    };
+    function changeMonth(delta) {
+      currentDate.setMonth(currentDate.getMonth() + delta);
+      renderCalendar();
+    }
 
-    window.changeMonth = function(delta) {
-      window.currentDate.setMonth(window.currentDate.getMonth() + delta);
-      window.renderCalendar();
-    };
-
-    window.fetchCloudData = function() {
-      if (!isCloudReady) {
-        fallbackToLocalStorage();
-      }
-      window.renderCalendar();
-      window.renderSummary();
-    };
-
-    window.renderSummary = function() {
+    function renderSummary() {
       const list = document.getElementById('summaryList');
       list.innerHTML = '';
 
-      // Find all unique users across all marked unavailable dates
-      const allUsers = new Set();
-      Object.values(window.storeData).forEach(userList => {
-        if (Array.isArray(userList)) {
-          userList.forEach(u => allUsers.add(u));
-        }
+      // 收集所有填過「唔得閒」嘅不重複朋友名單
+      const allFriends = new Set();
+      Object.values(storeData).forEach(friendsList => {
+        friendsList.forEach(f => allFriends.add(f));
       });
 
-      const totalUsers = allUsers.size;
+      const totalFriendsCount = allFriends.size;
 
-      if (totalUsers === 0) {
+      if (totalFriendsCount === 0) {
         list.innerHTML = '<li style="color:var(--text-muted); padding:10px 0;">暫時未有人標記唔得閒日子。</li>';
         return;
       }
 
-      const year = window.currentDate.getFullYear();
-      const month = window.currentDate.getMonth();
+      // 計算當前顯示月份的所有日子
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
       const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-      const availableDaysList = [];
+      const freeDaysAnalysis = [];
 
       for (let day = 1; day <= daysInMonth; day++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const busyUsers = window.storeData[dateStr] || [];
+        const busyFriends = storeData[dateStr] || [];
         
-        // Available users = All users minus unavailable users on this date
-        const freeUsers = Array.from(allUsers).filter(u => !busyUsers.includes(u));
-
-        availableDaysList.push({
+        // 得閒嘅朋友 = 所有朋友減去該日唔得閒嘅朋友
+        const freeFriends = Array.from(allFriends).filter(f => !busyFriends.includes(f));
+        
+        freeDaysAnalysis.push({
           date: dateStr,
-          availableCount: freeUsers.length,
-          freeUsers: freeUsers
+          freeCount: freeFriends.length,
+          freeFriends: freeFriends,
+          busyFriends: busyFriends
         });
       }
 
-      // Sort by highest available count first
-      availableDaysList.sort((a, b) => b.availableCount - a.availableCount);
+      // 排序：最多人得閒嘅日子排最前
+      freeDaysAnalysis.sort((a, b) => b.freeCount - a.freeCount);
 
-      // Display Top 5 available days
-      availableDaysList.slice(0, 5).forEach(item => {
+      // 顯示前 5 個最多人得閒嘅日子
+      freeDaysAnalysis.slice(0, 5).forEach(item => {
         const li = document.createElement('li');
         li.className = 'summary-item';
-        const freeNamesStr = item.freeUsers.length > 0 ? item.freeUsers.join(', ') : '無人得閒';
+        const friendText = item.freeFriends.length > 0 ? item.freeFriends.join(', ') : '無人得閒';
         li.innerHTML = `
-          <span><strong>${item.date}</strong> (得閒: ${freeNamesStr})</span>
-          <span class="highlight">${item.availableCount} 人得閒</span>
+          <span><strong>${item.date}</strong> (得閒: ${friendText})</span>
+          <span class="highlight">${item.freeCount} 人得閒</span>
         `;
         list.appendChild(li);
       });
-    };
+    }
 
-    // Initialize on document load
-    window.addEventListener('DOMContentLoaded', () => {
-      const savedName = localStorage.getItem('friends_calendar_user') || '';
-      document.getElementById('userName').value = savedName;
-      initFirebase();
-    });
+    init();
   </script>
 </body>
 </html>
